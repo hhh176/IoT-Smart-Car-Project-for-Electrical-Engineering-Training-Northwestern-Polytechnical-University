@@ -1,0 +1,509 @@
+C51 COMPILER V9.54   ________                                                              05/22/2026 11:34:56 PAGE 1   
+
+
+C51 COMPILER V9.54, COMPILATION OF MODULE ________
+OBJECT MODULE PLACED IN 智能小车.OBJ
+COMPILER INVOKED BY: E:\KEILC51\C51\BIN\C51.EXE 智能小车.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND TABS(2)
+
+line level    source
+
+   1          /*单片机晶振频率选用11.0592MHZ*/
+   2          #include "STC8H.h"          //单片机型号stc8h3k64s4
+   3          #include "stdio.h"
+   4          #include "math.h"
+   5          #include "intrins.h"
+   6          #define  uchar unsigned char
+   7          #define  uint unsigned int
+   8          //////////////////////////////////////  
+   9          #define FOSC        11059200UL
+  10          #define BRT         (65536 - FOSC / 9600 / 4)
+  11          /////////////////////////////////////////////////////语音播报相关定义
+  12          #define HEADLEN       5  //数据包头的长度
+  13          #define BKM_OFFSET    4  //背景音乐命令偏移
+  14          #define LEN_OFFSET    2  //长度字节的偏移量（一般不会超过255字节，因此只使用1字节长度）
+  15          sbit  BUSY = P2^6;       //开发板上SYN6288的BUSY引脚固定连接到
+  16          uchar nBkm = 0x00;
+  17          uchar code head[HEADLEN] = {0xfd,0x00,0x00,0x01,0x00};//
+  18          /////////////////////////////////////////////////串口通讯定义
+  19          bit    busy;
+  20          uchar  wptr;
+  21          uchar  rptr;
+  22          uchar  buffer[23];    //IC接收存储数组
+  23          uchar  table[4];    //无线通讯接收存储数组
+  24          uchar  BT;        //蓝牙
+  25          uchar  dat;             //无线通讯变量
+  26          /////////////////////////////////////左右电机接口
+  27          sbit  DJL1 = P1^2;     //左电机IO定义
+  28          sbit  DJL2 = P1^6;     //左电机IO定义
+  29          sbit  DJR1 = P2^2;     //右电机IO定义
+  30          sbit  DJR2 = P5^5;     //右电机IO定义
+  31          /////////////////////////////////////寻迹红外接口
+  32          sbit  HWL =  P2^3;     //红外左边IO定义
+  33          sbit  HWZ =  P3^5;     //红外中间IO定义
+  34          sbit  HWR =  P2^1;     //红外右边IO定义
+  35          ////////////////////////////////////
+  36          sbit  GM  =  P3^3;     //光敏电阻IO定义 用来检测红绿灯的红灯
+  37          ////////////////////////////////////
+  38          sbit  k1  =  P3^4;      //按键IO定义
+  39          ////////////////////////////////////
+  40          sbit  led =  P5^4;     //指示灯IO定义，可以用于调试
+  41          ///////////////////////////////////超声波发射接收IO定义
+  42          sbit  Trig = P2^0;     //超声波发射
+  43          sbit  Echo = P3^2;     //超声波接收
+  44          uint  S;               //S存放超声波测距的值
+  45          uchar id=0;
+  46          ///////////////////////////////////定义标志位
+  47          bit  flag1,flag2,flag3,flag4,flag5,flag6;
+  48          uchar lastRFID = 6;       
+  49          uchar traceDir = 0;       
+  50          bit rfidWaitCmd;
+  51          bit rfidReleaseCmd;
+  52          #define RED_LIGHT_LEVEL 0 
+  53          ////////////////////////////////////延时程序
+  54          void delayms(uint xms)
+  55          {
+C51 COMPILER V9.54   ________                                                              05/22/2026 11:34:56 PAGE 2   
+
+  56   1        uchar j;uint i;
+  57   1        for(i=xms;i>0;i--)
+  58   1        for(j=110;j>0;j--);
+  59   1      }
+  60          ///////////////////////////////////
+  61          void qianjin()     //小车前进
+  62           {
+  63   1          DJL1 = 0;
+  64   1          DJL2 = 1;
+  65   1          DJR1 = 1;
+  66   1          DJR2 = 0;
+  67   1       }
+  68          ///////////////////////////////////
+  69          void houtui()     //小车后退
+  70           {
+  71   1          DJL1 = 1;
+  72   1          DJL2 = 0;
+  73   1          DJR1 = 0;
+  74   1          DJR2 = 1;
+  75   1       }
+  76          ///////////////////////////////////
+  77          void zuozhuan()   //小车左转
+  78           {
+  79   1           DJL1 = 0;
+  80   1           DJL2 = 0;
+  81   1           DJR1 = 1;
+  82   1           DJR2 = 0;
+  83   1       }
+  84          
+  85          ///////////////////////////////////
+  86          void youzhuan()   //小车右转
+  87           {
+  88   1           DJL1 = 0;
+  89   1           DJL2 = 1;
+  90   1           DJR1 = 0;
+  91   1           DJR2 = 0;
+  92   1       }
+  93          /////////////////////////////////////
+  94          void stop()       //小车停止
+  95           {
+  96   1          DJL1 = 0;
+  97   1          DJL2 = 0;
+  98   1          DJR1 = 0;
+  99   1          DJR2 = 0;
+ 100   1       }
+ 101          /////////////////////////////////////
+ 102          int IsRedLight()
+ 103          {
+ 104   1          if(GM == RED_LIGHT_LEVEL)
+ 105   1          {
+ 106   2              delayms(20);
+ 107   2              if(GM == RED_LIGHT_LEVEL)
+ 108   2              {
+ 109   3                  return 1;
+ 110   3              }
+ 111   2          }
+ 112   1          return 0;
+ 113   1      }
+ 114          /////////////////////////////////////
+ 115          void FollowLine()  //黑线检测为0
+ 116          {
+ 117   1          if(HWZ == 0 && HWL == 1 && HWR == 1)
+C51 COMPILER V9.54   ________                                                              05/22/2026 11:34:56 PAGE 3   
+
+ 118   1          {
+ 119   2              traceDir = 0;
+ 120   2              qianjin();
+ 121   2          }
+ 122   1          else if(HWL == 0 && HWR == 1)
+ 123   1          {
+ 124   2              traceDir = 1;
+ 125   2              zuozhuan();
+ 126   2          }
+ 127   1          else if(HWR == 0 && HWL == 1)
+ 128   1          {
+ 129   2              traceDir = 2;
+ 130   2              youzhuan();
+ 131   2          }
+ 132   1          else if(HWL == 0 && HWZ == 0 && HWR == 0)
+ 133   1          {
+ 134   2              traceDir = 0;
+ 135   2              qianjin();
+ 136   2          }
+ 137   1          else
+ 138   1          {
+ 139   2              if(traceDir == 1)
+ 140   2              {
+ 141   3                  zuozhuan();
+ 142   3              }
+ 143   2              else if(traceDir == 2)
+ 144   2              {
+ 145   3                  youzhuan();
+ 146   3              }
+ 147   2              else
+ 148   2              {
+ 149   3                  qianjin();
+ 150   3              }
+ 151   2          }
+ 152   1      }
+ 153          ////////////////////////////////////定时器T0初始化 
+ 154          void TM0_Init( )
+ 155          {
+ 156   1        TMOD = 0x01;            //设置定时器T0模式1
+ 157   1        TL0 = 0x00;             //设置定时初值
+ 158   1        TH0 = 0x00;             //设置定时初值
+ 159   1      //  TR0 = 1;              //定时器0开始计时
+ 160   1      //  ET0 = 1;              //允许定时器T0中断  
+ 161   1      } 
+ 162          ////////////////////////////////////定时器T1定时10ms初始化
+ 163          void Timer1_Init( )   //10毫秒@11.0592MHz
+ 164          {
+ 165   1        AUXR &= 0xBF;          //定时器时钟12T模式
+ 166   1        TMOD &= 0x0F;          //设置定时器模式
+ 167   1        TL1 = 0x00;            //设置定时初始值
+ 168   1        TH1 = 0xDC;            //设置定时初始值
+ 169   1        TF1 = 0;               //清除TF1标志
+ 170   1        TR1 = 0;               //关闭定时器T1，需要的定时器T1，TR1 = 1; 
+ 171   1      }
+ 172          
+ 173          ///////////////////////////////////////////////
+ 174          void  Start()                //启动发射超声波脉冲
+ 175            {
+ 176   1          Trig = 1;                //启动一次模块
+ 177   1          _nop_();_nop_();
+ 178   1          _nop_();_nop_();
+ 179   1          _nop_();_nop_();
+C51 COMPILER V9.54   ________                                                              05/22/2026 11:34:56 PAGE 4   
+
+ 180   1          _nop_();_nop_();
+ 181   1          _nop_();_nop_();
+ 182   1          _nop_();_nop_();
+ 183   1          _nop_();_nop_();
+ 184   1          _nop_();_nop_();
+ 185   1          Trig = 0;
+ 186   1        }
+ 187          ////////////////////////////////////定时器3做串口3
+ 188          void Uart3_Init()                //波特率9600bps@11.0592MHz
+ 189          {  
+ 190   1          S3CON = 0x50;
+ 191   1          T3L = BRT;
+ 192   1          T3H = BRT >> 8;
+ 193   1          T4T3M = 0x0a;
+ 194   1          busy = 0; 
+ 195   1       }
+ 196          //////////////////////////////////定时器2做串口1、串口2、串口4
+ 197          void UartInit()                   //波特率9600bps@11.0592MHz
+ 198          {                  
+ 199   1          SCON  = 0x50;
+ 200   1        S2CON = 0x10;
+ 201   1        S4CON = 0x10;
+ 202   1          T2L = BRT;
+ 203   1          T2H = BRT >> 8;
+ 204   1          AUXR = 0x15;                  
+ 205   1          wptr = 0x00;
+ 206   1          busy = 0;
+ 207   1      }
+ 208          ////////////////////////////////串口1 IC卡发送程序
+ 209          void UartSend(uchar dat)
+ 210          {
+ 211   1          while (busy);
+ 212   1          busy = 1;
+ 213   1          SBUF = dat;
+ 214   1      }
+ 215          ////////////////////////////////串口2无线通讯模块发送程序
+ 216          void Uart2Send(uchar dat)
+ 217          {
+ 218   1          while (busy);
+ 219   1          busy = 1;
+ 220   1          S2BUF = dat;
+ 221   1      }
+ 222          ////////////////////////////////串口3语音播报发送程序
+ 223          void Uart3Send(uchar dat)
+ 224          {
+ 225   1          while (busy);
+ 226   1          busy = 1;
+ 227   1          S3BUF = dat;
+ 228   1      }
+ 229          ////////////////////////////////串口4蓝牙通讯发送程序    
+ 230          void Uart4Send(uchar dat)
+ 231          {
+ 232   1          while (busy);
+ 233   1          busy = 1;
+ 234   1          S4BUF = dat;
+ 235   1      }
+ 236          void Uart4SendStr(char *p)
+ 237          {
+ 238   1          while (*p)
+ 239   1          {
+ 240   2            Uart4Send(*p++);
+ 241   2          }
+C51 COMPILER V9.54   ________                                                              05/22/2026 11:34:56 PAGE 5   
+
+ 242   1      }
+ 243          
+ 244          //////////////////////////////////语音播报程序 
+ 245          void Speech(uchar *buf)
+ 246          {
+ 247   1         uchar i = 0;          //循环计数变量
+ 248   1         uchar xor = 0x00;     //校验码初始化
+ 249   1         uchar ch = 0x00;
+ 250   1         uchar len = 0x00;
+ 251   1         while(buf[len++]);
+ 252   1        //发送数据包头(0xFD + 2字节长度 + 1字节命令字 + 1字节命令参数)
+ 253   1        for(i = 0; i < HEADLEN; i++)
+ 254   1          {
+ 255   2            if(i == BKM_OFFSET)
+ 256   2            ch = nBkm << 3; //写入背景音乐
+ 257   2            else if(i == LEN_OFFSET)
+ 258   2            ch = len + 3;
+ 259   2            else
+ 260   2            ch = head[i];
+ 261   2            xor ^= ch;
+ 262   2            Uart3Send(ch);
+ 263   2          }
+ 264   1        //发送文字内容
+ 265   1        for(i = 0; i < len; i++)
+ 266   1        {
+ 267   2          xor ^= buf[i];
+ 268   2          Uart3Send(buf[i]);
+ 269   2        }
+ 270   1          Uart3Send(xor);         //发送校验位
+ 271   1          delayms(50);
+ 272   1          while(BUSY);            //等待语音播报完成
+ 273   1            delayms(50);
+ 274   1      }
+ 275          
+ 276          void Station(uchar id)
+ 277          {
+ 278   1          switch(id)
+ 279   1          {
+ 280   2              case 1: Speech("一号站"); break;
+ 281   2              case 2: Speech("二号站"); break;
+ 282   2              case 3: Speech("三号站"); break;
+ 283   2              case 4: Speech("四号站"); break;
+ 284   2              case 5: Speech("五号站"); break;
+ 285   2              default: break;
+ 286   2          }
+ 287   1      }
+ 288          //////////////////////////////////////////////RFID标签检测
+ 289          void CheckRFID()
+ 290          {
+ 291   1          
+ 292   1          id = buffer[5];
+ 293   1          if(id >= 1 && id <= 5)
+ 294   1          {
+ 295   2              if((id != lastRFID) && (rfidWaitCmd == 0))
+ 296   2              {
+ 297   3                  stop();
+ 298   3                  lastRFID = id;
+ 299   3                  rfidWaitCmd = 1;
+ 300   3                  rfidReleaseCmd = 0;
+ 301   3                  Station(id);
+ 302   3                  Uart2Send(id);  //把读到的RFID编号通过无线通讯发送给主控板，主控板根据编号控制相应的LED灯亮灭
+ 303   3                 
+C51 COMPILER V9.54   ________                                                              05/22/2026 11:34:56 PAGE 6   
+
+ 304   3              }
+ 305   2              buffer[5] = 0;
+ 306   2          }
+ 307   1          else
+ 308   1          {
+ 309   2              lastRFID = 6;
+ 310   2          }
+ 311   1      }
+ 312          //////////////////////////////////////////////红绿灯处理：红灯停车，绿灯继续循迹
+ 313          void CheckTrafficLight()
+ 314          {
+ 315   1          if(IsRedLight())
+ 316   1          {
+ 317   2              stop();
+ 318   2              while(IsRedLight())
+ 319   2              {
+ 320   3                  stop();
+ 321   3                  delayms(20);
+ 322   3              }
+ 323   2              delayms(100);
+ 324   2          }
+ 325   1      }
+ 326          //////////////////////////////////////////////初始程序
+ 327          void init()
+ 328          {
+ 329   1        TM0_Init( );                //定时器T0初始化
+ 330   1        Timer1_Init( );             //定时器T1初始化
+ 331   1        UartInit( );                //定时器2波特初始化
+ 332   1        Uart3_Init( );              //定时器3波特初始化
+ 333   1        IT0 = 0;                    //使能INT0上升沿和下降沿中断
+ 334   1        EX0 = 1;                    //使能INT0中断
+ 335   1      //TR1 = 1;                    //启动定时器
+ 336   1      //ET1 = 1;                    //使能定时器中断
+ 337   1        IE2 = 0x19;           //开串口2、串口3、串口4    
+ 338   1        ES  = 1;            //开串口1
+ 339   1        EA  = 1;            //打开总中断
+ 340   1        P_SW1 = 0x40;           //设置串口1切换到P3.6和P3.7读IC卡信息
+ 341   1        P0M0 = 0xfc; P0M1 = 0x00;   //1111 1100                      
+ 342   1        P1M0 = 0xfc; P1M1 = 0x00;   //1111 1100   
+ 343   1        P2M0 = 0x04; P2M1 = 0x00;   //0000 0100  
+ 344   1        P3M0 = 0x10; P3M1 = 0x00; 
+ 345   1        P5M0 = 0xff; P5M1 = 0x00; 
+ 346   1        rfidWaitCmd = 0;
+ 347   1        rfidReleaseCmd = 0;
+ 348   1          
+ 349   1      }
+ 350          void main()
+ 351          {
+ 352   1        uint a;
+ 353   1        a = 0;
+ 354   1        init();                     //调用初始化
+ 355   1        //while(k1==1);               //按下k1键开始执行
+ 356   1        Speech("欢迎使用智能车");
+ 357   1        while(1)
+ 358   1        {
+ 359   2            ///////////////////////////////////单片机运行指示灯,请不要删除
+ 360   2            a++;
+ 361   2            if(a==50000){a=0;led=~led;}
+ 362   2            ///////////////////////////////////
+ 363   2            Start();                          //发送超声波信号
+ 364   2            TR0 = 1;                          //定时器T0开启计数
+ 365   2      
+C51 COMPILER V9.54   ________                                                              05/22/2026 11:34:56 PAGE 7   
+
+ 366   2            CheckTrafficLight();              
+ 367   2            CheckRFID();
+ 368   2            if(rfidReleaseCmd)
+ 369   2            {
+ 370   3                rfidReleaseCmd = 0;
+ 371   3                rfidWaitCmd = 0;
+ 372   3            }
+ 373   2            if(rfidWaitCmd)
+ 374   2            {
+ 375   3                stop();
+ 376   3                continue;
+ 377   3            }
+ 378   2            FollowLine();                     
+ 379   2            /////////////////////////////////超声波
+ 380   2            if(S<5&&S>3)
+ 381   2            {
+ 382   3                stop();//Speech("停车");
+ 383   3            }
+ 384   2            ////////////////////////////////蓝牙
+ 385   2            if(BT==7){BT=0; qianjin();}
+ 386   2         }
+ 387   1      }
+ 388          /////////////////////////////////////////////////外部中断T0超声波接收计算距离
+ 389          void INT0_Isr() interrupt 0
+ 390          {
+ 391   1         EX0 = 0;                                     //关闭外部中断T0
+ 392   1         TR0 = 0;                                     //停止定时T0工作
+ 393   1         S = TH0*256+TL0;                             //把超声返回时间放到S里
+ 394   1         TH0 = 0;                                     //清除TH0
+ 395   1         TL0 = 0;                                     //清除TL0
+ 396   1         S = S*1.7/100;                               //算出来是CM存到S变量里
+ 397   1         EX0 = 1;                                     //打开外部中断
+ 398   1      }
+ 399          ////////////////////////////////////////////////定时器T1中断每10ms进入一次
+ 400          void TM1_Isr() interrupt 3
+ 401          {
+ 402   1                                         
+ 403   1      }
+ 404          /////////////////////////////////////////////////IC读卡器串口1中断 
+ 405          void UartIsr() interrupt 4    
+ 406          {
+ 407   1          if (TI)
+ 408   1          {
+ 409   2            TI = 0;
+ 410   2            busy = 0;
+ 411   2          }
+ 412   1          if (RI)
+ 413   1          {
+ 414   2             RI = 0;
+ 415   2             buffer[wptr++] = SBUF;   //读到IC卡数据存到数组buffer[]里，我们只要判断buffer[5]是否等于1-5,
+ 416   2             if(wptr>=22){wptr=0;}    //例如：if(buffer[5]==1){buffer[5]=0;Speech("西工大站");}记得buffer[5]=0;要
+             -清零。
+ 417   2          }
+ 418   1      }
+ 419          //////////////////////////////////////////////串口2无线通讯模块接收中断
+ 420          void Uart2Isr() interrupt 8
+ 421          {
+ 422   1          uchar rxdat;
+ 423   1          if (S2CON & 0x02)
+ 424   1          {
+ 425   2              S2CON &= ~0x02;
+ 426   2              busy = 0;
+C51 COMPILER V9.54   ________                                                              05/22/2026 11:34:56 PAGE 8   
+
+ 427   2          }
+ 428   1          if (S2CON & 0x01)
+ 429   1          {
+ 430   2              S2CON &= ~0x01;
+ 431   2              rxdat = S2BUF;
+ 432   2              if(dat >= 4){dat = 0;}
+ 433   2              table[dat++] = rxdat;        //主控板发过来的多个数据存到数组里
+ 434   2              if(rxdat==0xDD)
+ 435   2              {
+ 436   3                  if((table[0] == 0xA1) && (table[1] == 0x01) && (table[2] == 0xDD) && rfidWaitCmd)
+ 437   3                  {
+ 438   4                      rfidReleaseCmd = 1;
+ 439   4                  }
+ 440   3                  dat=0;
+ 441   3              }                        //接收到完整帧0xA1 0x01 0xDD后才放行，避免一号站ID 0x01被误判为放行
+ 442   2          }
+ 443   1      }
+ 444          
+ 445          ///////////////////////////////////////////////串口3中断语音播报用
+ 446          void Uart3Isr() interrupt 17
+ 447          {
+ 448   1          if (S3CON & 0x02)
+ 449   1          {
+ 450   2              S3CON &= ~0x02;
+ 451   2              busy = 0;
+ 452   2          }
+ 453   1          if (S3CON & 0x01)
+ 454   1          {
+ 455   2              S3CON &= ~0x01;
+ 456   2          }
+ 457   1      }
+ 458          ///////////////////////////////////////////////串口4蓝牙接收中断
+ 459          void Uart4Isr() interrupt 18
+ 460          {
+ 461   1          if (S4CON & 0x02)
+ 462   1          {
+ 463   2              S4CON &= ~0x02;
+ 464   2              busy = 0;
+ 465   2          }
+ 466   1          if (S4CON & 0x01)
+ 467   1          {
+ 468   2              S4CON &= ~0x01;
+ 469   2          BT = S4BUF;               //把手机发送过来的数据存储到BT变量里
+ 470   2          }
+ 471   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1073    ----
+   CONSTANT SIZE    =     54    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     37       9
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      9    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

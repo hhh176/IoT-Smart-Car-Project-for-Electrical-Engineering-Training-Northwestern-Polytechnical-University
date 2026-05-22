@@ -1,0 +1,335 @@
+C51 COMPILER V9.60.0.0   ________                                                          05/22/2026 10:06:35 PAGE 1   
+
+
+C51 COMPILER V9.60.0.0, COMPILATION OF MODULE ________
+OBJECT MODULE PLACED IN 智能小车.OBJ
+COMPILER INVOKED BY: C:\Keil_v5\C51\BIN\C51.EXE 智能小车.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND TABS(2)
+
+line level    source
+
+   1          /*???????????????11.0592MHZ*/
+   2          #include "STC8H.h"
+   3          #include "stdio.h"
+   4          #include "math.h"
+   5          #include "intrins.h"
+   6          #define  uchar unsigned char
+   7          #define  uint unsigned int
+   8          #define FOSC        11059200UL
+   9          #define BRT         (65536 - FOSC / 9600 / 4)
+  10          #define HEADLEN       5
+  11          #define BKM_OFFSET    4
+  12          #define LEN_OFFSET    2
+  13          sbit  BUSY = P2^6;
+  14          uchar nBkm = 0x00;
+  15          uchar code head[HEADLEN] = {0xfd,0x00,0x00,0x01,0x00};
+  16          bit    busy;
+  17          uchar  wptr;
+  18          uchar  rptr;
+  19          uchar  buffer[23];
+  20          uchar  table[4];
+  21          uchar  BT;
+  22          uchar  dat;
+  23          sbit  DJL1 = P1^2;
+  24          sbit  DJL2 = P1^6;
+  25          sbit  DJR1 = P2^2;
+  26          sbit  DJR2 = P5^5;
+  27          sbit  HWL =  P2^3;
+  28          sbit  HWZ =  P3^5;
+  29          sbit  HWR =  P2^1;
+  30          sbit  GM  =  P3^3;
+  31          sbit  k1  =  P3^4;
+  32          sbit  led =  P5^4;
+  33          sbit  Trig = P2^0;
+  34          sbit  Echo = P3^2;
+  35          uint  S;
+  36          bit  flag1,flag2,flag3,flag4,flag5,flag6;
+  37          
+  38          void delayms(uint xms)
+  39          {
+  40   1        uchar j;uint i;
+  41   1        for(i=xms;i>0;i--)
+  42   1          for(j=110;j>0;j--);
+  43   1      }
+  44          void qianjin()
+  45           {
+  46   1          DJL1 = 0;
+  47   1          DJL2 = 1;
+  48   1          DJR1 = 1;
+  49   1          DJR2 = 0;
+  50   1       }
+  51          void houtui()
+  52           {
+  53   1          DJL1 = 1;
+  54   1          DJL2 = 0;
+  55   1          DJR1 = 0;
+C51 COMPILER V9.60.0.0   ________                                                          05/22/2026 10:06:35 PAGE 2   
+
+  56   1          DJR2 = 1;
+  57   1       }
+  58          void zuozhuan()
+  59           {
+  60   1          DJL1 = 0;
+  61   1          DJL2 = 0;
+  62   1          DJR1 = 1;
+  63   1          DJR2 = 0;
+  64   1       }
+  65          void youzhuan()
+  66           {
+  67   1          DJL1 = 0;
+  68   1          DJL2 = 1;
+  69   1          DJR1 = 0;
+  70   1          DJR2 = 0;
+  71   1       }
+  72          void stop()
+  73           {
+  74   1          DJL1 = 0;
+  75   1          DJL2 = 0;
+  76   1          DJR1 = 0;
+  77   1          DJR2 = 0;
+  78   1       }
+  79          void TM0_Init( )
+  80          {
+  81   1        TMOD = 0x01;
+  82   1        TL0 = 0x00;
+  83   1        TH0 = 0x00;
+  84   1      }
+  85          void Timer1_Init( )
+  86          {
+  87   1        AUXR &= 0xBF;
+  88   1        TMOD &= 0x0F;
+  89   1        TL1 = 0x00;
+  90   1        TH1 = 0xDC;
+  91   1        TF1 = 0;
+  92   1        TR1 = 0;
+  93   1      }
+  94          void  Start()
+  95            {
+  96   1          Trig = 1;
+  97   1          _nop_();_nop_();
+  98   1          _nop_();_nop_();
+  99   1          _nop_();_nop_();
+ 100   1          _nop_();_nop_();
+ 101   1          _nop_();_nop_();
+ 102   1          _nop_();_nop_();
+ 103   1          _nop_();_nop_();
+ 104   1          _nop_();_nop_();
+ 105   1          Trig = 0;
+ 106   1        }
+ 107          void Uart3_Init()
+ 108          {
+ 109   1          S3CON = 0x50;
+ 110   1          T3L = BRT;
+ 111   1          T3H = BRT >> 8;
+ 112   1          T4T3M = 0x0a;
+ 113   1          busy = 0;
+ 114   1       }
+ 115          void UartInit()
+ 116          {
+ 117   1          SCON  = 0x50;
+C51 COMPILER V9.60.0.0   ________                                                          05/22/2026 10:06:35 PAGE 3   
+
+ 118   1          S2CON = 0x10;
+ 119   1          S4CON = 0x10;
+ 120   1          T2L = BRT;
+ 121   1          T2H = BRT >> 8;
+ 122   1          AUXR = 0x15;
+ 123   1          wptr = 0x00;
+ 124   1          busy = 0;
+ 125   1      }
+ 126          void UartSend(uchar dat)
+ 127          {
+ 128   1          while (busy);
+ 129   1          busy = 1;
+ 130   1          SBUF = dat;
+ 131   1      }
+ 132          void Uart2Send(uchar dat)
+ 133          {
+ 134   1          while (busy);
+ 135   1          busy = 1;
+ 136   1          S2BUF = dat;
+ 137   1      }
+ 138          void Uart3Send(uchar dat)
+ 139          {
+ 140   1          while (busy);
+ 141   1          busy = 1;
+ 142   1          S3BUF = dat;
+ 143   1      }
+ 144          void Uart4Send(uchar dat)
+ 145          {
+ 146   1          while (busy);
+ 147   1          busy = 1;
+ 148   1          S4BUF = dat;
+ 149   1      }
+ 150          void Uart4SendStr(char *p)
+ 151          {
+ 152   1          while (*p)
+ 153   1          {
+ 154   2            Uart4Send(*p++);
+ 155   2          }
+ 156   1      }
+ 157          void Speech(uchar *buf)
+ 158          {
+ 159   1         uchar i = 0;
+ 160   1         uchar xor = 0x00;
+ 161   1         uchar ch = 0x00;
+ 162   1         uchar len = 0x00;
+ 163   1         while(buf[len++]);
+ 164   1        for(i = 0; i < HEADLEN; i++)
+ 165   1          {
+ 166   2            if(i == BKM_OFFSET)
+ 167   2            ch = nBkm << 3;
+ 168   2            else if(i == LEN_OFFSET)
+ 169   2            ch = len + 3;
+ 170   2            else
+ 171   2            ch = head[i];
+ 172   2            xor ^= ch;
+ 173   2            Uart3Send(ch);
+ 174   2          }
+ 175   1        for(i = 0; i < len; i++)
+ 176   1        {
+ 177   2          xor ^= buf[i];
+ 178   2          Uart3Send(buf[i]);
+ 179   2        }
+C51 COMPILER V9.60.0.0   ________                                                          05/22/2026 10:06:35 PAGE 4   
+
+ 180   1          Uart3Send(xor);
+ 181   1          delayms(50);
+ 182   1            while(BUSY);
+ 183   1            delayms(50);
+ 184   1      }
+ 185          void init()
+ 186          {
+ 187   1        TM0_Init( );
+ 188   1        Timer1_Init( );
+ 189   1        UartInit( );
+ 190   1        Uart3_Init( );
+ 191   1        IT0 = 0;
+ 192   1        EX0 = 1;
+ 193   1        TR1 = 1;
+ 194   1        ET1 = 1;
+ 195   1        IE2 = 0x19;
+ 196   1        ES  = 1;
+ 197   1        EA  = 1;
+ 198   1        P_SW1 = 0x40;
+ 199   1        P0M0 = 0xfc; P0M1 = 0x00;
+ 200   1        P1M0 = 0xfc; P1M1 = 0x00;
+ 201   1        P2M0 = 0x04; P2M1 = 0x00;
+ 202   1        P3M0 = 0x10; P3M1 = 0x00;
+ 203   1        P5M0 = 0xff; P5M1 = 0x00;
+ 204   1      }
+ 205          void main()
+ 206          {
+ 207   1        uint a;
+ 208   1        init();
+ 209   1        while(1)
+ 210   1        {
+ 211   2            a++;
+ 212   2            if(a==50000){a=0;led=~led;}
+ 213   2            Start();
+ 214   2            TR0 = 1;
+ 215   2            if(buffer[5]==1)      {buffer[5]=0;Speech("第一站");}
+ 216   2            else if(buffer[5]==2) {buffer[5]=0;Speech("第二站");}
+ 217   2            else if(buffer[5]==3) {buffer[5]=0;Speech("第3站");}
+ 218   2            else if(buffer[5]==4) {buffer[5]=0;Speech("第四站");}
+ 219   2            else if(buffer[5]==5) {buffer[5]=0;Speech("第五站");}
+ 220   2            if(BT==7){BT=0; qianjin();}
+ 221   2         }
+ 222   1      }
+ 223          void INT0_Isr() interrupt 0
+ 224          {
+ 225   1         EX0 = 0;
+ 226   1         TR0 = 0;
+ 227   1         S = TH0*256+TL0;
+ 228   1         TH0 = 0;
+ 229   1         TL0 = 0;
+ 230   1          S = S*1.7/100;
+ 231   1          EX0 = 1;
+ 232   1      }
+ 233          void TM1_Isr() interrupt 3
+ 234          {
+ 235   1          if(GM==0)
+ 236   1          {
+ 237   2              stop();
+ 238   2          }
+ 239   1          else
+ 240   1          {
+ 241   2              if(HWL==1 && HWZ==0 && HWR==1)       { qianjin(); }
+C51 COMPILER V9.60.0.0   ________                                                          05/22/2026 10:06:35 PAGE 5   
+
+ 242   2              else if(HWL==0 && HWZ==1 && HWR==1)  { zuozhuan(); }
+ 243   2              else if(HWL==1 && HWZ==1 && HWR==0)  { youzhuan(); }
+ 244   2              else if(HWL==0 && HWZ==0 && HWR==0)  { qianjin(); }
+ 245   2              else if(HWL==0 && HWZ==0 && HWR==1)  { zuozhuan(); }
+ 246   2              else if(HWL==1 && HWZ==0 && HWR==0)  { youzhuan(); }
+ 247   2              else                                 { qianjin(); }
+ 248   2          }
+ 249   1      }
+ 250          void UartIsr() interrupt 4
+ 251          {
+ 252   1          if (TI)
+ 253   1          {
+ 254   2            TI = 0;
+ 255   2            busy = 0;
+ 256   2          }
+ 257   1          if (RI)
+ 258   1          {
+ 259   2             RI = 0;
+ 260   2             buffer[wptr++] = SBUF;
+ 261   2             if(wptr>=22){wptr=0;}
+ 262   2          }
+ 263   1      }
+ 264          void Uart2Isr() interrupt 8
+ 265          {
+ 266   1          if (S2CON & 0x02)
+ 267   1          {
+ 268   2              S2CON &= ~0x02;
+ 269   2              busy = 0;
+ 270   2          }
+ 271   1          if (S2CON & 0x01)
+ 272   1          {
+ 273   2              S2CON &= ~0x01;
+ 274   2              table[dat++] = S2BUF;
+ 275   2              if(S2BUF==0xDD){dat=0;}
+ 276   2          }
+ 277   1      }
+ 278          void Uart3Isr() interrupt 17
+ 279          {
+ 280   1          if (S3CON & 0x02)
+ 281   1          {
+ 282   2              S3CON &= ~0x02;
+ 283   2              busy = 0;
+ 284   2          }
+ 285   1          if (S3CON & 0x01)
+ 286   1          {
+ 287   2              S3CON &= ~0x01;
+ 288   2          }
+ 289   1      }
+ 290          void Uart4Isr() interrupt 18
+ 291          {
+ 292   1          if (S4CON & 0x02)
+ 293   1          {
+ 294   2              S4CON &= ~0x02;
+ 295   2              busy = 0;
+ 296   2          }
+ 297   1          if (S4CON & 0x01)
+ 298   1          {
+ 299   2              S4CON &= ~0x01;
+ 300   2              BT = S4BUF;
+ 301   2          }
+ 302   1      }
+
+C51 COMPILER V9.60.0.0   ________                                                          05/22/2026 10:06:35 PAGE 6   
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    931    ----
+   CONSTANT SIZE    =     39    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     34      10
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      7    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

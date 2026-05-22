@@ -1,0 +1,17 @@
+<html>
+<body>
+<pre>
+<h1>礦ision Build Log</h1>
+<h2>Project:</h2>
+C:\Users\taozhui88\Desktop\208文件\红绿灯程序\程序.uvproj
+Project File Date:  02/19/2025
+
+<h2>Output:</h2>
+Build target 'Target 1'
+compiling 程序.c...
+linking...
+*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
+    SEGMENT: ?PR?_UART_FA?程序
+Program Size: data=28.1 xdata=0 code=408
+creating hex file from ".\Objects\程序"...
+".\Objects\程序" - 0 Error(s), 1 Warning(s).

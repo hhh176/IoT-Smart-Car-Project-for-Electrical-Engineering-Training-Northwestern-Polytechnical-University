@@ -1,0 +1,5 @@
+"STARTUP.obj",
+"智能小车.obj",
+"EEPROM.obj" 
+TO "智能小车" 
+RAMSIZE(256) 

@@ -1,0 +1,306 @@
+C51 COMPILER V9.54   ____                                                                  05/22/2026 15:06:23 PAGE 1   
+
+
+C51 COMPILER V9.54, COMPILATION OF MODULE ____
+OBJECT MODULE PLACED IN .\Objects\程序.obj
+COMPILER INVOKED BY: D:\Keil5\C51\BIN\C51.EXE 程序.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\程序.l
+                    -st) TABS(2) OBJECT(.\Objects\程序.obj)
+
+line level    source
+
+   1          /* 
+   2             主控板代码：车路协同智能控制主控（修复夜间报站与数码管归属）
+   3             单片机型号：STC8H3K64S4  晶振频率：11.0592MHz
+   4          */
+   5          
+   6          #include "STC8H.h"             
+   7          #include "intrins.h"           
+   8          #include "tm1650.h"
+   9          
+  10          #define uchar unsigned char                         
+  11          #define uint  unsigned int     
+  12          
+  13          #define HEADLEN     5    
+  14          #define BKM_OFFSET  4    
+  15          #define LEN_OFFSET  2    
+  16          sbit BUSY = P1^2;        
+  17          uchar nBkm = 0x00;
+  18          uchar code head[HEADLEN] = {0xfd,0x00,0x00,0x01,0x00};
+  19          
+  20          bit busy;    
+  21          
+  22          sbit PWM1  = P2^5;             // 舵机1
+  23          sbit PWM2  = P2^6;             // 舵机2
+  24          sbit IR_IN = P3^2;             // 红外传感器
+  25          sbit    k1 = P3^7;             // 按键k1
+  26          sbit    k2 = P3^6;             // 按键k2
+  27          sbit   led = P5^5;             // 运行指示灯
+  28          
+  29          uint Servo1PwmDat = 1700;      // 默认开机抬杆位置
+  30          
+  31          /* 
+  32             Mode 状态定义：
+  33             0: 日间运行状态 (无车到站，数码管显示 000)
+  34             1: 夜间运行状态 (无车到站，数码管显示 000)
+  35             2: 小车到站倒计时状态 (不论日夜，数码管显示 00X)
+  36          */
+  37          uchar Mode = 0;                
+  38          uchar SavedMode = 0;           // 用于暂存进入倒计时前的日/夜状态，放行后好恢复
+  39          
+  40          // --- 小车无线交互核心变量 ---
+  41          uchar current_station = 0;     // 当前小车所在的站点ID (1-5)，0表示没有车到站
+  42          uint station_timer = 0;        // 5秒放行倒计时器 (由于20ms心跳，250次 = 5秒)
+  43          bit start_countdown = 0;       // 启动5秒放行倒计时标志
+  44          
+  45          // TM1650 共阳/共阴数码管数字段码表（'0'-'9'）
+  46          uchar code num_table[] = {0x3f,0x06,0x5b,0x4f,0x66,0x6d,0x7d,0x07,0x7f,0x6f};
+  47          
+  48          void delayms(uint ms)
+  49          {
+  50   1          uint i, j;
+  51   1          for(i=0; i<85; i++)         
+  52   1              for(j=0; j<ms; j++);
+  53   1      }
+  54          
+C51 COMPILER V9.54   ____                                                                  05/22/2026 15:06:23 PAGE 2   
+
+  55          void Uart2Send(uchar dat)
+  56          {
+  57   1          while (busy);
+  58   1          busy = 1;
+  59   1          S2BUF = dat;
+  60   1      }
+  61          
+  62          void Speech(uchar *buf)
+  63          {
+  64   1          uchar i = 0, xor = 0x00, ch = 0x00, len = 0x00;
+  65   1          while(buf[len++]);
+  66   1          len--; 
+  67   1          for(i = 0; i < HEADLEN; i++)
+  68   1          {
+  69   2              if(i == BKM_OFFSET) ch = nBkm << 3; 
+  70   2              else if(i == LEN_OFFSET) ch = len + 3;
+  71   2              else ch = head[i];
+  72   2              xor ^= ch;
+  73   2              while (busy); busy = 1; S4BUF = ch; 
+  74   2          }
+  75   1          for(i = 0; i < len; i++)
+  76   1          {
+  77   2              xor ^= buf[i];
+  78   2              while (busy); busy = 1; S4BUF = buf[i];
+  79   2          }
+  80   1          while (busy); busy = 1; S4BUF = xor;         
+  81   1          
+  82   1          delayms(10); 
+  83   1      }
+  84          
+  85          void init()  
+  86          {
+  87   1          P0M1 = 0x00;   P0M0 = 0x00;   
+  88   1          P1M1 = 0x00;   P1M0 = 0x00;   
+  89   1          P2M1 = 0x00;   P2M0 = 0x00;   
+  90   1          P3M1 = 0x00;   P3M0 = 0xc0;   // P3.6, P3.7 设为准双向
+  91   1          P4M1 = 0x00;   P4M0 = 0x00;   
+  92   1          P5M1 = 0x00;   P5M0 = 0x00;   
+  93   1      
+  94   1          // 定时器0驱动舵机
+  95   1          TMOD &= 0xF0; TMOD |= 0x01;                 
+  96   1          TL0 = 0x00; TH0 = 0x00; TR0 = 1; ET0 = 1;                      
+  97   1      
+  98   1          // 串口2和串口4波特率发生器由Timer2提供 (9600bps)
+  99   1          S2CON = 0x10; S4CON = 0x10;
+ 100   1          AUXR &= 0xFB;                
+ 101   1          T2L = 0xE8; T2H = 0xFF; AUXR |= 0x10;                 
+ 102   1          busy = 0;
+ 103   1      
+ 104   1          IE2 = 0x11; EA = 1;               
+ 105   1      }
+ 106          
+ 107          void Timer0(uint pwm)           
+ 108          {
+ 109   1          uint value = 65535-pwm;       
+ 110   1          TR0 = 0; TL0=value; TH0=value>>8; TR0 = 1;                     
+ 111   1      }
+ 112          
+ 113          // 主控板板载数码管显示刷新（常态全部显示000，小车到站时显示00X）
+ 114          void RefreshDisplay()
+ 115          {
+ 116   1          if (Mode == 2 && current_station > 0) // 小车到站模式，静态显示 "00X"
+C51 COMPILER V9.54   ____                                                                  05/22/2026 15:06:23 PAGE 3   
+
+ 117   1          {
+ 118   2              Set1650(0x68, num_table[0]); // 百位 "0"
+ 119   2              Set1650(0x6a, num_table[0]); // 十位 "0"
+ 120   2              Set1650(0x6c, num_table[current_station % 10]); // 个位动态显示站点ID
+ 121   2          }
+ 122   1          else // 日间常态(Mode=0) 或 夜间常态(Mode=1)，主控板数码管均统一保持显示 "000"
+ 123   1          {
+ 124   2              Set1650(0x68, num_table[0]); // 百位 "0"
+ 125   2              Set1650(0x6a, num_table[0]); // 十位 "0"
+ 126   2              Set1650(0x6c, num_table[0]); // 个位 "0"
+ 127   2          }
+ 128   1      }
+ 129          
+ 130          void main()
+ 131          {     
+ 132   1          uint led_count = 0;
+ 133   1          init();                
+ 134   1          Init1650();            
+ 135   1          
+ 136   1          // 开机初始化：给红绿灯发标准的5字节日间包（绿灯10秒(0x0A)，红灯12秒(0x0C)）
+ 137   1          delayms(200);
+ 138   1          Uart2Send(0xA5); Uart2Send(0x01); Uart2Send(0x0A); Uart2Send(0x0C); Uart2Send(0xDD); 
+ 139   1          
+ 140   1          Speech("欢迎来到互联网交通");
+ 141   1      
+ 142   1          while(1)
+ 143   1          {    
+ 144   2              Init1650();          
+ 145   2      
+ 146   2              // --- 核心业务：自动放行倒计时处理 ---
+ 147   2              if(start_countdown)
+ 148   2              {
+ 149   3                  if(station_timer >= 250) // 250次 * 20ms = 5000ms = 5秒时间到
+ 150   3                  {
+ 151   4                      start_countdown = 0; 
+ 152   4                      station_timer = 0;
+ 153   4                      
+ 154   4                      // 1. 无线发送单字节放行码给小车（小车收到 0x01 退出停顿）
+ 155   4                      Uart2Send(0xA1); 
+ 156   4                     Uart2Send(0x01); Uart2Send(0xDD);
+ 157   4                      
+ 158   4                      Speech("小车放行");
+ 159   4                      current_station = 0; // 清空站号信息
+ 160   4                      Mode = SavedMode;    // 完美恢复到进入到站模式前的日间(0)或夜间(1)状态
+ 161   4                  }
+ 162   3              }
+ 163   2      
+ 164   2              // 【按键K1：切换至日间模式】
+ 165   2              if (k1 == 0)
+ 166   2              {
+ 167   3                  delayms(10);     
+ 168   3                  if (k1 == 0)
+ 169   3                  {
+ 170   4                      start_countdown = 0; // 强行切模式时复位小车到站状态
+ 171   4                      current_station = 0;
+ 172   4                      Mode = 0;    
+ 173   4                      SavedMode = 0;
+ 174   4                      Servo1PwmDat = 1700; // 抬杆放行
+ 175   4                      Speech("系统已切换至日间模式");
+ 176   4                      
+ 177   4                      // 发送日间指令：绿灯10秒(0x0A)，红灯12秒(0x0C)
+ 178   4                      Uart2Send(0xA5); 
+C51 COMPILER V9.54   ____                                                                  05/22/2026 15:06:23 PAGE 4   
+
+ 179   4                      Uart2Send(0x01); 
+ 180   4                      Uart2Send(0x0A); 
+ 181   4                      Uart2Send(0x0C); 
+ 182   4                      Uart2Send(0xDD); 
+ 183   4                      
+ 184   4                      while(k1 == 0); 
+ 185   4                  }
+ 186   3              }
+ 187   2      
+ 188   2              // 【按键K2：切换至夜间模式】
+ 189   2              if (k2 == 0)
+ 190   2              {
+ 191   3                  delayms(10);     
+ 192   3                  if (k2 == 0)
+ 193   3                  {
+ 194   4                      start_countdown = 0; // 强行切模式时复位小车到站状态
+ 195   4                      current_station = 0;
+ 196   4                      Mode = 1;    
+ 197   4                      SavedMode = 1;
+ 198   4                      Servo1PwmDat = 810;  // 落杆拦截
+ 199   4                      Speech("系统已切换至夜间模式");
+ 200   4                      
+ 201   4                      // 发送夜间指令给红绿灯板
+ 202   4                      Uart2Send(0xA5); 
+ 203   4                      Uart2Send(0x02); 
+ 204   4                      Uart2Send(0x00); 
+ 205   4                      Uart2Send(0x00); 
+ 206   4                      Uart2Send(0xDD); 
+ 207   4                      
+ 208   4                      while(k2 == 0); 
+ 209   4                  }
+ 210   3              }
+ 211   2      
+ 212   2              // 刷新主控板本身的数码管显示 (常态000，到站00X)
+ 213   2              RefreshDisplay();
+ 214   2      
+ 215   2              led_count++;
+ 216   2              if(led_count==500) { led_count=0; led=~led; }        
+ 217   2          }
+ 218   1      }
+ 219          
+ 220          // 定时器0中断：驱动舵机输出，并提供系统心跳基准
+ 221          void Timer0_isr() interrupt 1 
+ 222          {
+ 223   1          static uint i = 1;            
+ 224   1          switch(i)
+ 225   1          {
+ 226   2              case 1: PWM1 = 1; Timer0(Servo1PwmDat); break;      
+ 227   2              case 2: PWM1 = 0; Timer0(20000-Servo1PwmDat); i = 0; break;   
+ 228   2          }
+ 229   1          i++;
+ 230   1      
+ 231   1          // 状态机每轮询完一次完整的高低电平（即经过20ms）
+ 232   1          if(i == 2)
+ 233   1          {
+ 234   2              if(start_countdown)
+ 235   2              {
+ 236   3                  station_timer++; 
+ 237   3              }
+ 238   2          }
+ 239   1      }    
+ 240          
+C51 COMPILER V9.54   ____                                                                  05/22/2026 15:06:23 PAGE 5   
+
+ 241          // 串口2中断：无缝接收小车无线站点ID
+ 242          void Uart2Isr() interrupt 8
+ 243          {
+ 244   1          uchar rx_car;
+ 245   1          if (S2CON & 0x02) { S2CON &= ~0x02; busy = 0; } 
+ 246   1          
+ 247   1          if (S2CON & 0x01) 
+ 248   1          { 
+ 249   2              S2CON &= ~0x01; 
+ 250   2              rx_car = S2BUF;
+ 251   2              
+ 252   2              // 核心修正：取消 Mode != 1 限制，不管是日间还是夜间模式，只要收到 1~5 号站一律响应
+ 253   2              if(rx_car >= 1 && rx_car <= 5)
+ 254   2              {
+ 255   3                  // 如果当前不在倒计时状态，记录下当前的模式(日间0或夜间1)，以便5秒后能够原样恢复
+ 256   3                  if(Mode != 2)
+ 257   3                  {
+ 258   4                      SavedMode = Mode; 
+ 259   4                  }
+ 260   3                  
+ 261   3                  current_station = rx_car; // 锁定小车报站ID
+ 262   3                  station_timer = 0;        // 倒计时计数器清零
+ 263   3                  start_countdown = 1;      // 开启放行倒计时
+ 264   3                  Mode = 2;                 // 强制切换为主控板数码管到站显示状态 (00X)
+ 265   3              }
+ 266   2          } 
+ 267   1      }
+ 268          
+ 269          // 串口4中断：语音模块驱动
+ 270          void Uart4Isr() interrupt 18 
+ 271          { 
+ 272   1          if (S4CON & 0x02) { S4CON &= ~0x02; busy = 0; } 
+ 273   1          if (S4CON & 0x01) { S4CON &= ~0x01; } 
+ 274   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    884    ----
+   CONSTANT SIZE    =     85    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     21       6
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      2    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

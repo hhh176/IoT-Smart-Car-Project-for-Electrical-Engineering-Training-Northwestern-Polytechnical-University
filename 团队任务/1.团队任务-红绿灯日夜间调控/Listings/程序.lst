@@ -1,0 +1,286 @@
+C51 COMPILER V9.54   ____                                                                  05/22/2026 10:07:20 PAGE 1   
+
+
+C51 COMPILER V9.54, COMPILATION OF MODULE ____
+OBJECT MODULE PLACED IN .\Objects\程序.obj
+COMPILER INVOKED BY: D:\Keil5\C51\BIN\C51.EXE 程序.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\程序.l
+                    -st) TABS(2) OBJECT(.\Objects\程序.obj)
+
+line level    source
+
+   1          /* 红绿灯显示板：STC15W408AS，晶振频率11.0592MHZ */
+   2          #include "stc15.h"           
+   3          #include "intrins.h"          
+   4          
+   5          #define uchar unsigned char  
+   6          #define uint  unsigned int   
+   7          
+   8          sbit D1 = P5^4;             // 十位数码管段选
+   9          sbit D2 = P5^5;             // 个位数码管段选
+  10          sbit RR = P3^2;             // 红灯控制，低电平亮        
+  11          sbit YY = P3^3;             // 黄灯控制，低电平亮 
+  12          sbit GG = P3^4;             // 绿灯控制，低电平亮 
+  13          
+  14          uchar table[]={0xc0,0xf9,0xa4,0xb0,0x99,0x92,0x82,0xf8,0x80,0x90}; // 共阳段码
+  15          
+  16          uchar sum = 0;              // 串口接收索引
+  17          uchar pc_dat[6];            // 更改为固定6字节缓冲区（适配A5协议）
+  18          uchar sec;                  
+  19          uchar rsec=12, ysec=3, gsec=10;  
+  20          
+  21          #define STATE_GREEN   0     
+  22          #define STATE_YELLOW  1     
+  23          #define STATE_RED     2     
+  24          uchar state;                
+  25          
+  26          bit flag = 0;               // 1秒标志
+  27          bit half_flag = 0;          // 0.5秒标志
+  28          bit night_mode = 0;         // 夜间模式标志
+  29          bit yel_on = 0;             
+  30          bit cmd_ready = 0;          // 新增：一帧蓝牙数据接收完成标志
+  31          
+  32          void DelayMs(uint ms)
+  33          {
+  34   1          uint i,j;
+  35   1          for(i=0;i<85;i++)        
+  36   1              for(j=0;j<ms;j++);
+  37   1      }
+  38          
+  39          void init()  
+  40          {
+  41   1          // STC15W 所有 I/O 口配置为准双向口
+  42   1          P0M1 = 0x00; P0M0 = 0x00;   
+  43   1          P1M1 = 0x00; P1M0 = 0x00;   
+  44   1          P2M1 = 0x00; P2M0 = 0x00;   
+  45   1          P3M1 = 0x00; P3M0 = 0x00;   
+  46   1          P4M1 = 0x00; P4M0 = 0x00;   
+  47   1          P5M1 = 0x00; P5M0 = 0x00;   
+  48   1      
+  49   1          // 定时器0定时10ms
+  50   1          AUXR &= 0x7F;               
+  51   1          TMOD &= 0xF0;               
+  52   1          TL0 = 0x00; TH0 = 0xDC;     
+  53   1          ET0 = 1; TR0 = 1;           
+  54   1      
+C51 COMPILER V9.54   ____                                                                  05/22/2026 10:07:20 PAGE 2   
+
+  55   1          // 定时器2作为串口波特率发生器 (9600bps)
+  56   1          SCON = 0x50;                
+  57   1          AUXR |= 0x01;               
+  58   1          AUXR &= 0xFB;               
+  59   1          T2L = 0xE8; T2H = 0xFF;     
+  60   1          AUXR |= 0x10;               
+  61   1          
+  62   1          P_SW1 |= 0x40;              // 关键：串口1切换到 P3.6(RXD), P3.7(TXD) 连接蓝牙
+  63   1      }
+  64          
+  65          void display_day()
+  66          {
+  67   1          D2 = 0; D1 = 1;             // 亮个位
+  68   1          P1 = table[sec%10];          
+  69   1          DelayMs(3); P1 = 0xFF;      // 消隐预防鬼影
+  70   1          
+  71   1          D2 = 1; D1 = 0;             // 亮十位
+  72   1          P1 = table[sec/10];          
+  73   1          DelayMs(3); P1 = 0xFF;      
+  74   1      }
+  75          
+  76          void display_night()
+  77          {
+  78   1          // 十位：显示一横 “-”
+  79   1          D2 = 1; D1 = 0;             // 选中十位数码管
+  80   1          P1 = 0xBF;                  // 共阳极 “-” 的段码是 0xBF
+  81   1          DelayMs(3); P1 = 0xFF;      // 消隐
+  82   1          
+  83   1          // 个位：彻底不显示（全灭）
+  84   1          D2 = 0; D1 = 1;             // 选中个位数码管
+  85   1          P1 = 0xBF;                  // 0xFF 代表所有LED熄灭
+  86   1          DelayMs(3); P1 = 0xFF;      // 消隐
+  87   1      }
+  88          
+  89          void enter_night_mode()
+  90          {
+  91   1          night_mode = 1;               
+  92   1          GG = 1; RR = 1;             // 关绿、红
+  93   1          YY = 0; yel_on = 1;         // 开黄灯开始闪烁
+  94   1      }
+  95          
+  96          void enter_day_mode()
+  97          {
+  98   1          night_mode = 0;               
+  99   1          state = STATE_GREEN;          
+ 100   1          sec = gsec;                   
+ 101   1          GG = 0; YY = 1; RR = 1;     // 亮绿灯
+ 102   1          yel_on = 0;
+ 103   1      }
+ 104          
+ 105          void change_state()
+ 106          {
+ 107   1          switch(state)
+ 108   1          {
+ 109   2              case STATE_GREEN:      
+ 110   2                  state = STATE_YELLOW;
+ 111   2                  sec = ysec;               
+ 112   2                  GG = 1; YY = 0; RR = 1;     
+ 113   2                  yel_on = 1;              
+ 114   2                  break;
+ 115   2                  
+ 116   2              case STATE_YELLOW:    
+C51 COMPILER V9.54   ____                                                                  05/22/2026 10:07:20 PAGE 3   
+
+ 117   2                  state = STATE_RED;
+ 118   2                  sec = rsec;               
+ 119   2                  GG = 1; YY = 1; RR = 0;     
+ 120   2                  yel_on = 0;
+ 121   2                  break;
+ 122   2                  
+ 123   2              case STATE_RED:        
+ 124   2                  state = STATE_GREEN;
+ 125   2                  sec = gsec;               
+ 126   2                  GG = 0; YY = 1; RR = 1;     
+ 127   2                  yel_on = 0;
+ 128   2                  break;
+ 129   2          }
+ 130   1      }
+ 131          
+ 132          void process_cmd()
+ 133          {
+ 134   1          uchar i;
+ 135   1          // 验证接收合法性
+ 136   1          if(pc_dat[0] == 0xA5 && pc_dat[4] == 0xDD)
+ 137   1          {
+ 138   2              switch(pc_dat[1])
+ 139   2              {
+ 140   3                  case 0x01: // K1按下：日间模式，更新时间参数
+ 141   3                      gsec = pc_dat[2];     
+ 142   3                      rsec = pc_dat[3];     
+ 143   3                      enter_day_mode();
+ 144   3                      break;
+ 145   3                      
+ 146   3                  case 0x02: // K2按下：夜间模式
+ 147   3                      enter_night_mode();
+ 148   3                      break;
+ 149   3              }
+ 150   2          }
+ 151   1          
+ 152   1          // 释放命令锁，清空接收缓冲区
+ 153   1          for(i=0; i<6; i++) pc_dat[i] = 0;
+ 154   1          cmd_ready = 0; 
+ 155   1      }
+ 156          
+ 157          void main()
+ 158          {   
+ 159   1          init();                          
+ 160   1          enter_day_mode(); // 默认开机进入日间正常循环
+ 161   1          
+ 162   1          ES = 1;                          
+ 163   1          EA = 1;                          
+ 164   1          
+ 165   1          while(1)
+ 166   1          {
+ 167   2              // 1. 刷新显示
+ 168   2              if(night_mode)
+ 169   2                  display_night();          
+ 170   2              else
+ 171   2                  display_day();            
+ 172   2              
+ 173   2              // 2. 蓝牙命令到达事件处理
+ 174   2              if(cmd_ready)
+ 175   2              {
+ 176   3                  process_cmd();
+ 177   3              }
+ 178   2      
+C51 COMPILER V9.54   ____                                                                  05/22/2026 10:07:20 PAGE 4   
+
+ 179   2              // 3. 0.5秒黄灯异步闪烁事件
+ 180   2              if(half_flag)
+ 181   2              {
+ 182   3                  half_flag = 0;            
+ 183   3                  if(night_mode)
+ 184   3                  {
+ 185   4                      yel_on = ~yel_on;
+ 186   4                      YY = yel_on ? 0 : 1;  
+ 187   4                  }
+ 188   3                  else if(state == STATE_YELLOW)
+ 189   3                  {
+ 190   4                      yel_on = ~yel_on;
+ 191   4                      YY = yel_on ? 0 : 1;
+ 192   4                  }
+ 193   3              }
+ 194   2              
+ 195   2              // 4. 1秒状态机计时事件
+ 196   2              if(flag)
+ 197   2              {
+ 198   3                  flag = 0;                 
+ 199   3                  if(!night_mode)           
+ 200   3                  {
+ 201   4                      if(sec == 0) change_state();   
+ 202   4                  }
+ 203   3              }
+ 204   2          }
+ 205   1      }
+ 206          
+ 207          void Timer0_isr() interrupt 1 
+ 208          {
+ 209   1          static uchar t100 = 0;            
+ 210   1          static uchar t50  = 0;            
+ 211   1          
+ 212   1          t100++; t50++;
+ 213   1          
+ 214   1          if(t100 >= 100)          
+ 215   1          {
+ 216   2              t100 = 0; flag = 1;          
+ 217   2              if(!night_mode && sec > 0) sec--;                    
+ 218   2          }
+ 219   1          if(t50 >= 50)            
+ 220   1          {
+ 221   2              t50 = 0; half_flag = 1;        
+ 222   2          }
+ 223   1      }
+ 224          
+ 225          void Uart_1() interrupt 4
+ 226          {    
+ 227   1          if(RI)                  
+ 228   1          {                    
+ 229   2              RI = 0;             
+ 230   2              
+ 231   2              // 如果前一条命令还没被主循环处理完，则拒绝接收新数据防止被覆盖
+ 232   2              if(!cmd_ready) 
+ 233   2              {
+ 234   3                  pc_dat[sum] = SBUF; 
+ 235   3                  
+ 236   3                  // 收到帧头协议 0xA5 时判定合规
+ 237   3                  if(sum == 0 && pc_dat[0] != 0xA5)
+ 238   3                  {
+ 239   4                      sum = 0; // 过滤非包头杂散信号
+ 240   4                  }
+C51 COMPILER V9.54   ____                                                                  05/22/2026 10:07:20 PAGE 5   
+
+ 241   3                  // 完美接收完5个字节且末尾是结束符
+ 242   3                  else if(sum == 4 && pc_dat[4] == 0xDD)
+ 243   3                  {
+ 244   4                      sum = 0;
+ 245   4                      cmd_ready = 1; // 锁死接收，挂起命令给主循环处理
+ 246   4                  }
+ 247   3                  else
+ 248   3                  {
+ 249   4                      sum++;
+ 250   4                      if(sum >= 6) sum = 0; // 强力防爆、防止越界崩溃
+ 251   4                  }
+ 252   3              }
+ 253   2          } 
+ 254   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    508    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     24    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      5    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

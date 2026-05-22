@@ -1,0 +1,29 @@
+<html>
+<body>
+<pre>
+<h1>礦ision Build Log</h1>
+<h2>Project:</h2>
+C:\Users\taozhui88\Desktop\208文件\智能小车程序\智能小车.uvproj
+Project File Date:  02/19/2025
+
+<h2>Output:</h2>
+Build target '目标 1'
+compiling 智能小车.c...
+linking...
+*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
+    SEGMENT: ?PR?HOUTUI?_悄_小车
+*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
+    SEGMENT: ?PR?ZUOZHUAN?_悄_小车
+*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
+    SEGMENT: ?PR?YOUZHUAN?_悄_小车
+*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
+    SEGMENT: ?PR?STOP?_悄_小车
+*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
+    SEGMENT: ?PR?_UARTSEND?_悄_小车
+*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
+    SEGMENT: ?PR?_UART2SEND?_悄_小车
+*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
+    SEGMENT: ?PR?_UART4SENDSTR?_悄_小车
+Program Size: data=52.7 xdata=0 code=1652
+creating hex file from "智能小车"...
+"智能小车" - 0 Error(s), 7 Warning(s).
